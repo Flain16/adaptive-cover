@@ -7,21 +7,24 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.template import state_attr
 from numpy import cos, sin, tan
 from numpy import radians as rad
 
 from .helpers import get_domain, get_safe_state
 from .sun import SunData
-from .config_context_adapter import ConfigContextAdapter
 
+def state_attr(hass, entity_id, name):
+    """Manuelle Fallback-Funktion für das entfernte state_attr aus HA Core."""
+    state_obj = hass.states.get(entity_id)
+    if state_obj is not None:
+        return state_obj.attributes.get(name)
+    return None
 
 @dataclass
 class AdaptiveGeneralCover(ABC):
     """Collect common data."""
 
     hass: HomeAssistant
-    logger: ConfigContextAdapter
     sol_azi: float
     sol_elev: float
     sunset_pos: int
@@ -90,7 +93,6 @@ class AdaptiveGeneralCover(ABC):
             blindspot = (self.gamma <= left_edge) & (self.gamma >= right_edge)
             if self.blind_spot_elevation is not None:
                 blindspot = blindspot & (self.sol_elev <= self.blind_spot_elevation)
-            self.logger.debug("Is sun in blind spot? %s", blindspot)
             return blindspot
         return False
 
@@ -122,9 +124,7 @@ class AdaptiveGeneralCover(ABC):
             return self.sol_elev <= self.max_elevation
         if self.max_elevation is None:
             return self.sol_elev >= self.min_elevation
-        within_range = self.min_elevation <= self.sol_elev <= self.max_elevation
-        self.logger.debug("elevation within range? %s", within_range)
-        return within_range
+        return self.min_elevation <= self.sol_elev <= self.max_elevation
 
     @property
     def valid(self) -> bool:
@@ -137,7 +137,6 @@ class AdaptiveGeneralCover(ABC):
         valid = (
             (self.gamma < azi_min) & (self.gamma > -azi_max) & (self.valid_elevation)
         )
-        self.logger.debug("Sun in front of window (ignoring blindspot)? %s", valid)
         return valid
 
     @property
@@ -148,9 +147,6 @@ class AdaptiveGeneralCover(ABC):
         after_sunset = datetime.utcnow() > (sunset + timedelta(minutes=self.sunset_off))
         before_sunrise = datetime.utcnow() < (
             sunrise + timedelta(minutes=self.sunrise_off)
-        )
-        self.logger.debug(
-            "After sunset plus offset? %s", (after_sunset or before_sunrise)
         )
         return after_sunset or before_sunrise
 
@@ -206,20 +202,11 @@ class NormalCoverState:
 
     def get_state(self) -> int:
         """Return state."""
-        self.cover.logger.debug("Determining normal position")
-        dsv = self.cover.direct_sun_valid
-        self.cover.logger.debug(
-            "Sun directly in front of window & before sunset + offset? %s", dsv
+        state = np.where(
+            self.cover.direct_sun_valid,
+            self.cover.calculate_percentage(),
+            self.cover.default,
         )
-        if dsv:
-            state = self.cover.calculate_percentage()
-            self.cover.logger.debug(
-                "Yes sun in window: using calculated percentage (%s)", state
-            )
-        else:
-            state = self.cover.default
-            self.cover.logger.debug("No sun in window: using default value (%s)", state)
-
         result = np.clip(state, 0, 100)
         if self.cover.apply_max_position and result > self.cover.max_pos:
             return self.cover.max_pos
@@ -233,7 +220,6 @@ class ClimateCoverData:
     """Fetch additional data."""
 
     hass: HomeAssistant
-    logger: ConfigContextAdapter
     temp_entity: str
     temp_low: float
     temp_high: float
@@ -308,17 +294,8 @@ class ClimateCoverData:
     def is_winter(self) -> bool:
         """Check if temperature is below threshold."""
         if self.temp_low is not None and self.get_current_temperature is not None:
-            is_it = self.get_current_temperature < self.temp_low
-        else:
-            is_it = False
-
-        self.logger.debug(
-            "is_winter(): current_temperature < temp_low: %s < %s = %s",
-            self.get_current_temperature,
-            self.temp_low,
-            is_it,
-        )
-        return is_it
+            return self.get_current_temperature < self.temp_low
+        return False
 
     @property
     def outside_high(self) -> bool:
@@ -334,18 +311,8 @@ class ClimateCoverData:
     def is_summer(self) -> bool:
         """Check if temperature is over threshold."""
         if self.temp_high is not None and self.get_current_temperature is not None:
-            is_it = self.get_current_temperature > self.temp_high and self.outside_high
-        else:
-            is_it = False
-
-        self.logger.debug(
-            "is_summer(): current_temp > temp_high and outside_high?: %s > %s and %s = %s",
-            self.get_current_temperature,
-            self.temp_high,
-            self.outside_high,
-            is_it,
-        )
-        return is_it
+            return self.get_current_temperature > self.temp_high and self.outside_high
+        return False
 
     @property
     def is_sunny(self) -> bool:
@@ -354,12 +321,9 @@ class ClimateCoverData:
         if self.weather_entity is not None:
             weather_state = get_safe_state(self.hass, self.weather_entity)
         else:
-            self.logger.debug("is_sunny(): No weather entity defined")
             return True
         if self.weather_condition is not None:
-            matches = weather_state in self.weather_condition
-            self.logger.debug("is_sunny(): Weather: %s = %s", weather_state, matches)
-            return matches
+            return weather_state in self.weather_condition
 
     @property
     def lux(self) -> bool:
@@ -390,9 +354,6 @@ class ClimateCoverState(NormalCoverState):
 
     def normal_type_cover(self) -> int:
         """Determine state for horizontal and vertical covers."""
-
-        self.cover.logger.debug("Is presence? %s", self.climate_data.is_presence)
-
         if self.climate_data.is_presence:
             return self.normal_with_presence()
 
@@ -401,32 +362,23 @@ class ClimateCoverState(NormalCoverState):
     def normal_with_presence(self) -> int:
         """Determine state for horizontal and vertical covers with occupants."""
 
-        is_summer = self.climate_data.is_summer
-
         # Check if it's not summer and either lux, irradiance or sunny weather is present
-        if not is_summer and (
+        if not self.climate_data.is_summer and (
             self.climate_data.lux
             or self.climate_data.irradiance
             or not self.climate_data.is_sunny
         ):
             # If it's winter and the cover is valid, return 100
             if self.climate_data.is_winter and self.cover.valid:
-                self.cover.logger.debug(
-                    "n_w_p(): Winter and sun is in front of window = use 100"
-                )
                 return 100
             # Otherwise, return the default cover state
-            self.cover.logger.debug(
-                "n_w_p(): it's not summer and sunny weather is not present = use default"
-            )
             return self.cover.default
 
         # If it's summer and there's a transparent blind, return 0
-        if is_summer and self.climate_data.transparent_blind:
+        if self.climate_data.is_summer and self.climate_data.transparent_blind:
             return 0
 
         # If none of the above conditions are met, get the state from the parent class
-        self.cover.logger.debug("n_w_p(): None of the climate conditions are met")
         return super().get_state()
 
     def normal_without_presence(self) -> int:
@@ -479,18 +431,8 @@ class ClimateCoverState(NormalCoverState):
         if self.climate_data.blind_type == "cover_tilt":
             result = self.tilt_state()
         if self.cover.apply_max_position and result > self.cover.max_pos:
-            self.cover.logger.debug(
-                "Climate state: Max position applied (%s > %s)",
-                result,
-                self.cover.max_pos,
-            )
             return self.cover.max_pos
         if self.cover.apply_min_position and result < self.cover.min_pos:
-            self.cover.logger.debug(
-                "Climate state: Min position applied (%s < %s)",
-                result,
-                self.cover.min_pos,
-            )
             return self.cover.min_pos
         return result
 
@@ -514,11 +456,7 @@ class AdaptiveVerticalCover(AdaptiveGeneralCover):
 
     def calculate_percentage(self) -> float:
         """Convert blind height to percentage or default value."""
-        position = self.calculate_position()
-        self.logger.debug(
-            "Converting height to percentage: %s / %s * 100", position, self.h_win
-        )
-        result = position / self.h_win * 100
+        result = self.calculate_position() / self.h_win * 100
         return round(result)
 
 
