@@ -1,7 +1,7 @@
 {
   "domain": "adaptive_cover",
   "name": "Adaptive Cover",
-  "codeowners": ["@basbruss"],
+  "codeowners": ["@flain16"],
   "config_flow": true,
   "dependencies": [
     "sun",
@@ -15,5 +15,5 @@
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/basbruss/adaptive-cover/issues",
   "requirements": ["astral", "pandas"],
-  "version": "0.3.0b0"
+  "version": "0.4.0b0"
 }

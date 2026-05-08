@@ -5,6 +5,8 @@
 
 # Adaptive Cover
 
+This is a fork of brabuss original version which contains a few bugfixed for the current version of HomeAssistant, since the version from Brabus is not working any more, it is possible that in future there will be a version with new feature. In my current plan it could be a third type of cover which would be impleted, covers for diagonal blinds, like skylight which are bild diagonal and there do not fall in either of the both exisiting categories. Feel free to add any request or report issues as you detect theme, thanks!
+
 This Custom-Integration provides sensors for vertical and horizontal blinds based on the sun's position by calculating the position to filter out direct sunlight.
 
 This integration builds upon the template sensor from this forum post [Automatic Blinds](https://community.home-assistant.io/t/automatic-blinds-sunscreen-control-based-on-sun-platform/)
